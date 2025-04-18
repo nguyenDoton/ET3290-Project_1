@@ -1,0 +1,116 @@
+
+from facenet_pytorch import InceptionResnetV1
+import torch
+import torchvision.transforms as transforms
+from PIL import Image
+import os
+import numpy as np
+import torchvision.transforms.functional as TF
+import torch.nn.functional as F
+import random
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.preprocessing import LabelEncoder
+from google.colab import drive
+drive.mount('/content/drive')
+drive.mount("/content/drive", force_remount=True)
+dataset_path = "/content/drive/MyDrive/Training Dataset"
+print("People found:", os.listdir(dataset_path))
+
+def augment_image_for_test(image, rotation_deg=10, noise_std=0.05, blur_radius =1.5 , brightness_factor = 1):
+
+    image = TF.rotate(image, rotation_deg)
+    image = TF.adjust_brightness(image, brightness_factor)
+
+    if blur_radius > 0:
+        image = image.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+   
+    tensor_img = TF.to_tensor(image)
+    noise = torch.randn_like(tensor_img) * noise_std
+    noisy_img = tensor_img + noise
+    noisy_img = torch.clamp(noisy_img, 0.0, 1.0)
+
+    return TF.to_pil_image(noisy_img)
+
+print("Done training")
+
+embedding_db = defaultdict(list)
+
+def build_embedding_db(train_folder_path):
+    global embedding_db
+    for person in os.listdir(train_folder_path):
+        person_path = os.path.join(train_folder_path, person)
+        if os.path.isdir(person_path):
+            for img_name in os.listdir(person_path):
+                img_path = os.path.join(person_path, img_name)
+                try:
+                    image = Image.open(img_path).convert('RGB')
+                    image_tensor = transform(image).unsqueeze(0).to(device)
+                    with torch.no_grad():
+                        embedding = model(image_tensor)
+                        embedding = F.normalize(embedding, p=2, dim=1)
+                    embedding_db[person].append(embedding.cpu().numpy().flatten())
+                except Exception as e:
+                    print(f"Skipping {img_name}: {e}")
+
+def recognize_face_batch(folder_path, threshold=0.7):
+    if not embedding_db:
+        print("Embedding DB is empty. Run build_embedding_db first.")
+        return
+
+    true_labels = []
+    predicted_labels = []
+    paths = []
+
+    for person in os.listdir(folder_path):
+        person_path = os.path.join(folder_path, person)
+        if os.path.isdir(person_path):
+            for img_name in os.listdir(person_path):
+                img_path = os.path.join(person_path, img_name)
+                try:
+                    image = Image.open(img_path).convert('RGB')
+                    augment_img = augment_image_for_test(image, rotation_deg=30, noise_std=0.07,brightness_factor=1.0, blur_radius=1.5 )
+                    image_tensor = transform(augment_img).unsqueeze(0).to(device)
+                    with torch.no_grad():
+                        embedding = model(image_tensor)
+                        embedding = F.normalize(embedding, p=2, dim=1)
+                    query = embedding.cpu().numpy().flatten()
+
+                    best_match = None
+                    best_score = -1
+                    for db_person, db_embeddings in embedding_db.items():
+                        for ref_emb in db_embeddings:
+                            sim = cosine_similarity([query], [ref_emb])[0][0]
+                            if sim > best_score:
+                                best_score = sim
+                                best_match = db_person
+
+                    paths.append(img_path)
+                    true_labels.append(person)
+
+                    if best_score < threshold:
+                        predicted_labels.append("Unknown")
+                        print(f"[{img_path}] → Unknown face (sim: {best_score:.2f}) | Actual: {person}")
+                    else:
+                        predicted_labels.append(best_match)
+                        print(f"[{img_path}] → Predicted: {best_match} | Actual: {person} | Similarity: {best_score:.2f}")
+
+                except Exception as e:
+                    print(f"Skipping {img_name}: {e}")
+
+    filtered_true = [t for t, p in zip(true_labels, predicted_labels) if p != "Unknown"]
+    filtered_pred = [p for p in predicted_labels if p != "Unknown"]
+    if filtered_true:
+        acc = accuracy_score(filtered_true, filtered_pred)
+        f1 = f1_score(filtered_true, filtered_pred, average='weighted')
+        print(f"\nFiltered Accuracy (excluding Unknowns): {acc:.4f}")
+        print(f"F1 Score (excluding Unknowns): {f1:.4f}")
+    else:
+        print("No confident predictions made.")
+
+build_embedding_db("/content/drive/MyDrive/Training Dataset")
+recognize_face_batch("/content/drive/MyDrive/test", 0.7)
+
+
+
