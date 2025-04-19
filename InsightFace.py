@@ -43,10 +43,9 @@ def augment_image_for_test(image, rotation_deg=10, noise_std=0.05, blur_radius=1
 
 
 
-app = FaceAnalysis(name= 'buffalo_l')  # You can also use 'antelopev2'
+app = FaceAnalysis(name= 'buffalo_l') 
 app.prepare(ctx_id=0 if torch.cuda.is_available() else -1 ,det_thresh=0.25 )
 
-# Build embedding database
 embedding_db = defaultdict(list)
 
 def build_embedding_db_insightface(dataset_path, augment_times=1):
